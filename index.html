@@ -1,25 +1,47 @@
 import React, { useState, useEffect } from 'react';
-import { Upload, FileSpreadsheet, Camera, Trash2, Loader2, AlertCircle, CheckCircle2, Info } from 'lucide-react';
+import { Upload, FileSpreadsheet, Camera, Trash2, Loader2, AlertCircle, CheckCircle2, Info, HelpCircle, Key, Eye, EyeOff } from 'lucide-react';
 
-// Import SheetJS untuk export Excel asli (.xlsx) agar format angka tidak rusak
+// Import SheetJS untuk export Excel asli (.xlsx)
 const XLSX_SCRIPT_URL = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
-
-const apiKey = ""; // API Key disediakan oleh environment
 
 const App = () => {
   const [loading, setLoading] = useState(false);
   const [dataMaster, setDataMaster] = useState([]);
   const [imagePreview, setImagePreview] = useState(null);
   const [statusMsg, setStatusMsg] = useState({ type: '', text: '' });
+  const [showHelp, setShowHelp] = useState(false);
+  const [showKey, setShowKey] = useState(false);
+  
+  // State untuk API Key - Sudah diisi dengan key milikmu sebagai default
+  const [userApiKey, setUserApiKey] = useState("AIzaSyCRjfJuTfL8iCT23qAqb7D3amLVldW9mFc");
 
-  // Load library XLSX untuk export Excel berkualitas
+  // Load library & API Key dari localStorage saat startup
   useEffect(() => {
     const script = document.createElement("script");
     script.src = XLSX_SCRIPT_URL;
     document.head.appendChild(script);
+
+    // Jika ada key yang pernah disimpan di browser ini, gunakan itu. 
+    // Jika tidak, pakai default yang ada di state di atas.
+    const savedKey = localStorage.getItem("gemini_api_key");
+    if (savedKey) setUserApiKey(savedKey);
   }, []);
 
+  // Simpan key ke localStorage jika user merubahnya secara manual di UI
+  const handleKeyChange = (e) => {
+    const val = e.target.value;
+    setUserApiKey(val);
+    localStorage.setItem("gemini_api_key", val);
+  };
+
   const extractDataFromImage = async (base64Image) => {
+    const finalKey = userApiKey.trim(); 
+    
+    if (!finalKey) {
+      setStatusMsg({ type: 'error', text: 'API Key Kosong! Masukkan key agar AI bisa bekerja.' });
+      return;
+    }
+
     setLoading(true);
     setStatusMsg({ type: 'info', text: 'Sedang menganalisis foto Kartu Keluarga...' });
 
@@ -30,21 +52,18 @@ const App = () => {
       ATURAN KETAT:
       1. Ambil "No. KK" (16 digit angka di bagian atas).
       2. Ekstrak tabel anggota keluarga hanya jika "Nama Lengkap" dan "NIK" terbaca jelas.
-      3. JANGAN memasukkan baris kosong atau data dari bagian luar tabel (seperti nama Pejabat/Lurah di bawah).
-      4. Pastikan jumlah objek dalam array "anggota" sama persis dengan jumlah baris nama yang ada di tabel KK tersebut.
-      5. Bersihkan karakter aneh yang bukan bagian dari nama atau angka.
-      
-      Format JSON: { "no_kk": "...", "anggota": [{ "nik": "...", "nama": "...", "kelamin": "...", "alamat": "...", "rt": "...", "rw": "...", "tgl_lahir": "...", "agama": "...", "pendidikan": "...", "pekerjaan": "...", "gol_darah": "...", "kewarganegaraan": "..." }] }
+      3. JANGAN memasukkan baris kosong atau data dari bagian luar tabel.
+      4. Format JSON: { "no_kk": "...", "anggota": [{ "nik": "...", "nama": "...", "kelamin": "...", "alamat": "...", "rt": "...", "rw": "...", "tgl_lahir": "...", "agama": "...", "pendidikan": "...", "pekerjaan": "...", "gol_darah": "...", "kewarganegaraan": "..." }] }
     `;
 
     try {
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${finalKey}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           contents: [{
             parts: [
-              { text: "Hanya ekstrak baris yang berisi data anggota keluarga asli. Abaikan tanda tangan atau teks di bawah tabel." },
+              { text: "Ekstrak data anggota keluarga saja sesuai urutan di tabel KK." },
               { inlineData: { mimeType: "image/jpeg", data: base64Image.split(',')[1] } }
             ]
           }],
@@ -54,6 +73,11 @@ const App = () => {
       });
 
       const result = await response.json();
+      
+      if (result.error) {
+        throw new Error(result.error.message || "API Error");
+      }
+
       const extractedText = result.candidates?.[0]?.content?.parts?.[0]?.text;
       
       if (extractedText) {
@@ -62,11 +86,11 @@ const App = () => {
           parsed.anggota = parsed.anggota.filter(p => p.nama && p.nama.trim().length > 1);
         }
         processExtractedData(parsed);
-        setStatusMsg({ type: 'success', text: `Berhasil mengekstrak ${parsed.anggota.length} anggota keluarga.` });
+        setStatusMsg({ type: 'success', text: `Berhasil mengekstrak ${parsed.anggota.length} jiwa dari KK.` });
       }
     } catch (error) {
       console.error(error);
-      setStatusMsg({ type: 'error', text: 'Gagal mengekstrak data. Pastikan foto tegak dan jelas.' });
+      setStatusMsg({ type: 'error', text: `Gagal: ${error.message}. Pastikan Key benar & foto jelas.` });
     } finally {
       setLoading(false);
     }
@@ -92,7 +116,6 @@ const App = () => {
       kewarganegaraan: person.kewarganegaraan || "WNI",
       keterangan: ""
     }));
-
     setDataMaster(prev => [...prev, ...newRows]);
   };
 
@@ -110,180 +133,164 @@ const App = () => {
 
   const downloadExcel = () => {
     if (!window.XLSX) return;
-
-    const wsData = dataMaster.map(d => ({
-      "No Urut": d.no_urut,
-      "no_kk(*+16 digit)": d.no_kk,
-      "nik_ktp(*+16 digit)": d.nik_ktp,
-      "nama": d.nama,
-      "kelamin": d.kelamin,
-      "alamat": d.alamat,
-      "rt": d.rt,
-      "rw": d.rw,
-      "tgl_lahir": d.tgl_lahir,
-      "agama": d.agama,
-      "pendidikan": d.pendidikan,
-      "status_tinggal": d.status_tinggal,
-      "pekerjaan": d.pekerjaan,
-      "golongan darah": d.gol_darah,
-      "Kewarganegaraan": d.kewarganegaraan,
-      "Keterangan": d.keterangan
-    }));
-
-    const ws = window.XLSX.utils.json_to_sheet(wsData);
+    const ws = window.XLSX.utils.json_to_sheet(dataMaster);
     const wb = window.XLSX.utils.book_new();
     window.XLSX.utils.book_append_sheet(wb, ws, "Master Warga");
-    window.XLSX.writeFile(wb, `Data_KK_Master_${new Date().getTime()}.xlsx`);
+    window.XLSX.writeFile(wb, `Data_KK_Sukaluyu_${new Date().getTime()}.xlsx`);
   };
 
   return (
     <div className="min-h-screen bg-slate-50 p-4 md:p-8 font-sans text-slate-800">
       <div className="max-w-7xl mx-auto">
-        {/* Header Section */}
-        <div className="flex flex-col md:flex-row md:items-center justify-between mb-8 gap-4 bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
+        
+        {/* API Key Input Section - Sekarang sudah terisi otomatis */}
+        <div className="mb-6 bg-slate-900 text-white p-4 rounded-3xl flex flex-col md:flex-row items-center gap-4 shadow-xl border border-slate-700">
+          <div className="flex items-center gap-2 shrink-0">
+            <div className="bg-amber-500 p-1.5 rounded-lg">
+              <Key size={18} className="text-white" />
+            </div>
+            <span className="text-xs font-black uppercase tracking-widest">Gemini API Key:</span>
+          </div>
+          <div className="relative w-full">
+            <input 
+              type={showKey ? "text" : "password"} 
+              placeholder="Tempel API Key AIza... di sini" 
+              className="w-full bg-slate-800 border border-slate-700 rounded-2xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all font-mono"
+              value={userApiKey}
+              onChange={handleKeyChange}
+            />
+            <button 
+              onClick={() => setShowKey(!showKey)}
+              className="absolute right-3 top-2.5 text-slate-500 hover:text-white"
+            >
+              {showKey ? <EyeOff size={18} /> : <Eye size={18} />}
+            </button>
+          </div>
+          <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="text-[10px] text-indigo-400 hover:text-indigo-300 underline shrink-0 font-bold uppercase tracking-tighter">Bikin Key Baru</a>
+        </div>
+
+        {/* Main Header */}
+        <div className="flex flex-col md:flex-row md:items-center justify-between mb-8 gap-4 bg-white p-6 rounded-[2rem] shadow-sm border border-slate-100">
           <div>
-            <h1 className="text-3xl font-extrabold text-indigo-950 tracking-tight flex items-center gap-3">
-              <FileSpreadsheet className="text-indigo-600" size={32} />
-              KK to Excel 
-              <span className="bg-indigo-100 text-indigo-600 text-xs px-2 py-1 rounded-lg uppercase tracking-widest font-bold">Pro</span>
+            <h1 className="text-3xl font-black text-slate-900 tracking-tight flex items-center gap-3">
+              <div className="bg-indigo-600 p-2 rounded-2xl text-white shadow-lg shadow-indigo-200">
+                <FileSpreadsheet size={28} />
+              </div>
+              KK to Excel <span className="text-indigo-600">Pro</span>
             </h1>
-            <p className="text-slate-500 mt-1">Konversi foto Kartu Keluarga ke Master Warga secara instan.</p>
+            <p className="text-slate-500 mt-1 flex items-center gap-2 text-sm font-medium">
+              Digitalisasi Data Warga Desa Sukaluyu.
+              <button onClick={() => setShowHelp(!showHelp)} className="text-indigo-600 hover:bg-indigo-50 px-2 py-0.5 rounded-lg flex items-center gap-1 text-xs font-bold transition-colors">
+                <HelpCircle size={14} /> Bantuan
+              </button>
+            </p>
           </div>
           <div className="flex gap-3">
-            <button 
-              onClick={() => { setDataMaster([]); setImagePreview(null); setStatusMsg({type:'', text:''}); }}
-              className="px-4 py-2.5 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-2xl transition-all flex items-center gap-2 font-medium"
-            >
+            <button onClick={() => { setDataMaster([]); setImagePreview(null); setStatusMsg({type:'', text:''}); }} className="px-5 py-3 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-2xl transition-all flex items-center gap-2 font-bold text-sm">
               <Trash2 size={18} /> Reset
             </button>
-            <button 
-              onClick={downloadExcel}
-              disabled={dataMaster.length === 0}
-              className="px-6 py-2.5 bg-indigo-600 text-white rounded-2xl hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center gap-2 shadow-indigo-200 shadow-xl font-bold"
-            >
+            <button onClick={downloadExcel} disabled={dataMaster.length === 0} className="px-8 py-3 bg-indigo-600 text-white rounded-2xl hover:bg-indigo-700 disabled:opacity-50 transition-all flex items-center gap-2 shadow-xl shadow-indigo-100 font-black text-sm uppercase tracking-wider">
               <FileSpreadsheet size={18} /> Simpan Excel
             </button>
           </div>
         </div>
 
+        {showHelp && (
+          <div className="mb-8 grid grid-cols-1 md:grid-cols-3 gap-6 animate-in fade-in slide-in-from-top-4 duration-500">
+            <div className="bg-white p-6 rounded-3xl border border-indigo-50 shadow-sm hover:shadow-md transition-shadow">
+              <h3 className="font-black text-indigo-950 mb-2 uppercase text-xs tracking-widest">1. Status Key</h3>
+              <p className="text-xs text-slate-500 leading-relaxed">Key sudah terpasang secara default. Kamu bisa langsung mengunggah foto KK tanpa mengatur apapun lagi.</p>
+            </div>
+            <div className="bg-white p-6 rounded-3xl border border-indigo-50 shadow-sm hover:shadow-md transition-shadow">
+              <h3 className="font-black text-indigo-950 mb-2 uppercase text-xs tracking-widest">2. Upload Foto</h3>
+              <p className="text-xs text-slate-500 leading-relaxed">Gunakan foto KK yang paling jelas. AI akan membaca tabel dan mengambil data NIK, Nama, hingga Pekerjaan secara otomatis.</p>
+            </div>
+            <div className="bg-white p-6 rounded-3xl border border-indigo-50 shadow-sm hover:shadow-md transition-shadow">
+              <h3 className="font-black text-indigo-950 mb-2 uppercase text-xs tracking-widest">3. Export Hasil</h3>
+              <p className="text-xs text-slate-500 leading-relaxed">Cek data di tabel kanan. Jika sudah pas, klik Simpan Excel. Data siap di-upload ke sistem database desa.</p>
+            </div>
+          </div>
+        )}
+
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          {/* Left Panel: Upload & Preview Image */}
           <div className="lg:col-span-1 space-y-6">
-            <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200">
-              <h2 className="text-lg font-bold mb-4 flex items-center gap-2 text-indigo-900">
-                <Camera size={20} className="text-indigo-600" /> Upload Foto KK
+            <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-slate-200">
+              <h2 className="text-sm font-black mb-4 flex items-center gap-2 text-slate-900 uppercase tracking-widest">
+                <Camera size={18} className="text-indigo-600" /> Input Dokumen
               </h2>
-              
               <div className="relative group">
                 <input type="file" accept="image/*" onChange={handleFileUpload} className="hidden" id="kk-upload" disabled={loading} />
-                <label 
-                  htmlFor="kk-upload"
-                  className={`flex flex-col items-center justify-center w-full h-72 border-2 border-dashed rounded-3xl cursor-pointer transition-all duration-300
-                    ${loading ? 'bg-slate-50 border-slate-200' : 'bg-indigo-50/20 border-indigo-100 hover:border-indigo-400 hover:bg-indigo-50/50'}`}
-                >
+                <label htmlFor="kk-upload" className={`flex flex-col items-center justify-center w-full h-80 border-2 border-dashed rounded-[1.5rem] cursor-pointer transition-all ${loading ? 'bg-slate-50 border-slate-200' : 'bg-indigo-50/20 border-indigo-100 hover:border-indigo-400 hover:bg-indigo-50/50'}`}>
                   {loading ? (
-                    <div className="flex flex-col items-center">
-                      <div className="relative">
-                        <Loader2 className="animate-spin text-indigo-600 mb-4" size={48} />
-                        <div className="absolute inset-0 flex items-center justify-center">
-                          <div className="w-2 h-2 bg-indigo-600 rounded-full animate-ping"></div>
-                        </div>
-                      </div>
-                      <p className="text-sm text-indigo-900 font-black animate-pulse uppercase tracking-wider">Memproses Data...</p>
+                    <div className="flex flex-col items-center text-center px-4">
+                      <Loader2 className="animate-spin text-indigo-600 mb-4" size={48} />
+                      <p className="text-sm text-indigo-900 font-black uppercase tracking-wider">Memindai AI...</p>
                     </div>
                   ) : (
-                    <>
-                      <div className="w-16 h-16 bg-white rounded-full shadow-md flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
-                        <Upload className="text-indigo-600" size={28} />
+                    <div className="flex flex-col items-center">
+                      <div className="bg-white p-4 rounded-full shadow-sm mb-4 group-hover:scale-110 transition-transform">
+                        <Upload className="text-indigo-600" size={32} />
                       </div>
-                      <p className="text-sm font-bold text-slate-700">Pilih Foto Kartu Keluarga</p>
-                      <p className="text-[10px] text-slate-400 mt-2">JPG, PNG, atau WEBP</p>
-                    </>
+                      <p className="text-sm font-bold text-slate-700">Pilih Foto KK</p>
+                    </div>
                   )}
                 </label>
               </div>
 
               {imagePreview && (
                 <div className="mt-6">
-                  <p className="text-[10px] font-bold text-slate-400 uppercase mb-2 tracking-widest">Preview Dokumen</p>
+                  <p className="text-[10px] font-black text-slate-400 uppercase mb-2 tracking-widest">Dokumen Terdeteksi:</p>
                   <div className="rounded-2xl overflow-hidden border border-slate-100 shadow-inner">
-                    <img src={imagePreview} alt="Preview" className="w-full h-auto max-h-48 object-cover opacity-80" />
+                    <img src={imagePreview} alt="Preview" className="w-full h-auto max-h-48 object-cover opacity-90" />
                   </div>
                 </div>
               )}
 
               {statusMsg.text && (
-                <div className={`mt-6 p-4 rounded-2xl flex items-start gap-3 text-sm border-l-4 ${
-                  statusMsg.type === 'error' ? 'bg-red-50 text-red-700 border-red-500' : 
-                  'bg-emerald-50 text-emerald-800 border-emerald-500'
-                }`}>
+                <div className={`mt-6 p-4 rounded-2xl flex items-start gap-3 text-sm border-l-4 shadow-sm ${statusMsg.type === 'error' ? 'bg-red-50 text-red-700 border-red-500' : 'bg-emerald-50 text-emerald-800 border-emerald-500'}`}>
                   {statusMsg.type === 'error' ? <AlertCircle size={20} className="shrink-0" /> : <CheckCircle2 size={20} className="shrink-0" />}
-                  <span className="leading-tight font-semibold">{statusMsg.text}</span>
+                  <span className="leading-tight font-bold">{statusMsg.text}</span>
                 </div>
               )}
             </div>
-
-            <div className="bg-amber-50 p-5 rounded-3xl border border-amber-100 flex gap-4">
-              <div className="w-10 h-10 bg-amber-100 rounded-2xl flex items-center justify-center shrink-0">
-                <Info className="text-amber-600" size={20} />
-              </div>
-              <p className="text-xs text-amber-800 leading-relaxed">
-                <strong className="block mb-1">Tips Akurasi:</strong>
-                Pastikan posisi KK tidak terlipat dan tulisan terbaca jelas. Jika ada kesalahan data, Anda bisa menghapus baris di tabel sebelah dan upload ulang bagian yang kurang.
-              </p>
-            </div>
           </div>
 
-          {/* Right Panel: Data Table */}
           <div className="lg:col-span-2">
-            <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden min-h-[600px] flex flex-col">
+            <div className="bg-white rounded-[2rem] shadow-sm border border-slate-200 overflow-hidden min-h-[600px] flex flex-col">
               <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-white">
                 <div className="flex items-center gap-3">
-                  <h2 className="font-black text-slate-800 tracking-tight">DATA MASTER WARGA</h2>
-                  <span className="bg-slate-100 text-slate-600 text-[10px] px-2.5 py-1 rounded-full font-bold">
-                    DRAFT
-                  </span>
+                  <h2 className="font-black text-slate-800 tracking-tight uppercase text-sm">Daftar Hasil Ekstraksi</h2>
                 </div>
-                <div className="text-xs bg-indigo-600 text-white px-4 py-1.5 rounded-full font-black shadow-lg shadow-indigo-100">
-                  {dataMaster.length} BARIS
+                <div className="text-[10px] bg-slate-900 text-white px-4 py-1.5 rounded-full font-black shadow-lg">
+                  {dataMaster.length} DATA TERBACA
                 </div>
               </div>
               
               <div className="overflow-x-auto flex-grow">
-                <table className="w-full text-left text-xs border-collapse">
+                <table className="w-full text-left text-[11px] border-collapse">
                   <thead>
                     <tr className="bg-slate-50/50 text-slate-400 border-b border-slate-100">
-                      <th className="px-6 py-5 font-black uppercase tracking-widest text-[10px]">No</th>
-                      <th className="px-6 py-5 font-black uppercase tracking-widest text-[10px]">Nama Lengkap</th>
-                      <th className="px-6 py-5 font-black uppercase tracking-widest text-[10px]">NIK</th>
-                      <th className="px-6 py-5 font-black uppercase tracking-widest text-[10px]">Pekerjaan</th>
-                      <th className="px-6 py-5 font-black uppercase tracking-widest text-[10px] text-center">Aksi</th>
+                      <th className="px-6 py-5 font-black uppercase tracking-widest text-[9px]">No</th>
+                      <th className="px-6 py-5 font-black uppercase tracking-widest text-[9px]">Nama Warga</th>
+                      <th className="px-6 py-5 font-black uppercase tracking-widest text-[9px]">NIK KTP</th>
+                      <th className="px-6 py-5 font-black uppercase tracking-widest text-[9px] text-center">Hapus</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-50">
                     {dataMaster.length === 0 ? (
                       <tr>
-                        <td colSpan="5" className="px-6 py-40 text-center">
-                          <div className="flex flex-col items-center opacity-20">
-                            <FileSpreadsheet size={64} className="mb-4" />
-                            <p className="text-lg font-bold">Belum ada data yang diekstrak</p>
-                            <p className="text-sm">Silakan upload foto KK di panel sebelah kiri</p>
-                          </div>
-                        </td>
+                        <td colSpan="4" className="py-40 text-center text-slate-300 uppercase font-black tracking-widest">Tabel Kosong</td>
                       </tr>
                     ) : (
                       dataMaster.map((row, idx) => (
                         <tr key={idx} className="group hover:bg-indigo-50/30 transition-colors">
-                          <td className="px-6 py-4 text-slate-400 font-medium">{row.no_urut}</td>
-                          <td className="px-6 py-4 font-bold text-slate-900 uppercase tracking-tight">{row.nama}</td>
-                          <td className="px-6 py-4 font-mono text-indigo-600 font-bold bg-indigo-50/20 group-hover:bg-transparent">{row.nik_ktp}</td>
-                          <td className="px-6 py-4 text-slate-600 font-medium">{row.pekerjaan}</td>
+                          <td className="px-6 py-4 text-slate-400 font-bold">{row.no_urut}</td>
+                          <td className="px-6 py-4 font-black text-slate-900 uppercase tracking-tight">{row.nama}</td>
+                          <td className="px-6 py-4">
+                            <span className="font-mono text-indigo-600 font-black bg-indigo-50 px-2 py-1 rounded-lg border border-indigo-100">{row.nik_ktp}</span>
+                          </td>
                           <td className="px-6 py-4 text-center">
-                            <button 
-                              onClick={() => setDataMaster(dataMaster.filter((_, i) => i !== idx))}
-                              className="w-8 h-8 rounded-full flex items-center justify-center text-slate-300 hover:text-red-500 hover:bg-red-50 transition-all"
-                              title="Hapus baris ini"
-                            >
+                            <button onClick={() => setDataMaster(dataMaster.filter((_, i) => i !== idx))} className="text-slate-300 hover:text-red-500">
                               <Trash2 size={16} />
                             </button>
                           </td>
@@ -293,12 +300,6 @@ const App = () => {
                   </tbody>
                 </table>
               </div>
-              
-              {dataMaster.length > 0 && (
-                <div className="p-6 bg-slate-50/50 border-t border-slate-100 text-[10px] text-slate-400 italic">
-                  * Data NIK dan No. KK otomatis ditambahkan tanda bintang (*) di depan untuk mencegah pembulatan otomatis oleh Excel.
-                </div>
-              )}
             </div>
           </div>
         </div>
