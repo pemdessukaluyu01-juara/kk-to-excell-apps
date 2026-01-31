@@ -1,0 +1,310 @@
+import React, { useState, useEffect } from 'react';
+import { Upload, FileSpreadsheet, Camera, Trash2, Loader2, AlertCircle, CheckCircle2, Info } from 'lucide-react';
+
+// Import SheetJS untuk export Excel asli (.xlsx) agar format angka tidak rusak
+const XLSX_SCRIPT_URL = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+
+const apiKey = ""; // API Key disediakan oleh environment
+
+const App = () => {
+  const [loading, setLoading] = useState(false);
+  const [dataMaster, setDataMaster] = useState([]);
+  const [imagePreview, setImagePreview] = useState(null);
+  const [statusMsg, setStatusMsg] = useState({ type: '', text: '' });
+
+  // Load library XLSX untuk export Excel berkualitas
+  useEffect(() => {
+    const script = document.createElement("script");
+    script.src = XLSX_SCRIPT_URL;
+    document.head.appendChild(script);
+  }, []);
+
+  const extractDataFromImage = async (base64Image) => {
+    setLoading(true);
+    setStatusMsg({ type: 'info', text: 'Sedang menganalisis foto Kartu Keluarga...' });
+
+    const systemPrompt = `
+      Anda adalah ekstraktor data Kartu Keluarga profesional. 
+      Tugas: Ekstrak data dari gambar KARTU KELUARGA ke format JSON.
+      
+      ATURAN KETAT:
+      1. Ambil "No. KK" (16 digit angka di bagian atas).
+      2. Ekstrak tabel anggota keluarga hanya jika "Nama Lengkap" dan "NIK" terbaca jelas.
+      3. JANGAN memasukkan baris kosong atau data dari bagian luar tabel (seperti nama Pejabat/Lurah di bawah).
+      4. Pastikan jumlah objek dalam array "anggota" sama persis dengan jumlah baris nama yang ada di tabel KK tersebut.
+      5. Bersihkan karakter aneh yang bukan bagian dari nama atau angka.
+      
+      Format JSON: { "no_kk": "...", "anggota": [{ "nik": "...", "nama": "...", "kelamin": "...", "alamat": "...", "rt": "...", "rw": "...", "tgl_lahir": "...", "agama": "...", "pendidikan": "...", "pekerjaan": "...", "gol_darah": "...", "kewarganegaraan": "..." }] }
+    `;
+
+    try {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{
+            parts: [
+              { text: "Hanya ekstrak baris yang berisi data anggota keluarga asli. Abaikan tanda tangan atau teks di bawah tabel." },
+              { inlineData: { mimeType: "image/jpeg", data: base64Image.split(',')[1] } }
+            ]
+          }],
+          systemInstruction: { parts: [{ text: systemPrompt }] },
+          generationConfig: { responseMimeType: "application/json" }
+        })
+      });
+
+      const result = await response.json();
+      const extractedText = result.candidates?.[0]?.content?.parts?.[0]?.text;
+      
+      if (extractedText) {
+        const parsed = JSON.parse(extractedText);
+        if (parsed.anggota) {
+          parsed.anggota = parsed.anggota.filter(p => p.nama && p.nama.trim().length > 1);
+        }
+        processExtractedData(parsed);
+        setStatusMsg({ type: 'success', text: `Berhasil mengekstrak ${parsed.anggota.length} anggota keluarga.` });
+      }
+    } catch (error) {
+      console.error(error);
+      setStatusMsg({ type: 'error', text: 'Gagal mengekstrak data. Pastikan foto tegak dan jelas.' });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const processExtractedData = (data) => {
+    const startNo = dataMaster.length + 1;
+    const newRows = data.anggota.map((person, index) => ({
+      no_urut: startNo + index,
+      no_kk: `*${data.no_kk}`,
+      nik_ktp: `*${person.nik}`,
+      nama: person.nama.toUpperCase(),
+      kelamin: person.kelamin,
+      alamat: person.alamat,
+      rt: person.rt,
+      rw: person.rw,
+      tgl_lahir: person.tgl_lahir,
+      agama: person.agama,
+      pendidikan: person.pendidikan,
+      status_tinggal: "Menetap",
+      pekerjaan: person.pekerjaan.toUpperCase(),
+      gol_darah: person.gol_darah || "-",
+      kewarganegaraan: person.kewarganegaraan || "WNI",
+      keterangan: ""
+    }));
+
+    setDataMaster(prev => [...prev, ...newRows]);
+  };
+
+  const handleFileUpload = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setImagePreview(reader.result);
+        extractDataFromImage(reader.result);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const downloadExcel = () => {
+    if (!window.XLSX) return;
+
+    const wsData = dataMaster.map(d => ({
+      "No Urut": d.no_urut,
+      "no_kk(*+16 digit)": d.no_kk,
+      "nik_ktp(*+16 digit)": d.nik_ktp,
+      "nama": d.nama,
+      "kelamin": d.kelamin,
+      "alamat": d.alamat,
+      "rt": d.rt,
+      "rw": d.rw,
+      "tgl_lahir": d.tgl_lahir,
+      "agama": d.agama,
+      "pendidikan": d.pendidikan,
+      "status_tinggal": d.status_tinggal,
+      "pekerjaan": d.pekerjaan,
+      "golongan darah": d.gol_darah,
+      "Kewarganegaraan": d.kewarganegaraan,
+      "Keterangan": d.keterangan
+    }));
+
+    const ws = window.XLSX.utils.json_to_sheet(wsData);
+    const wb = window.XLSX.utils.book_new();
+    window.XLSX.utils.book_append_sheet(wb, ws, "Master Warga");
+    window.XLSX.writeFile(wb, `Data_KK_Master_${new Date().getTime()}.xlsx`);
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-50 p-4 md:p-8 font-sans text-slate-800">
+      <div className="max-w-7xl mx-auto">
+        {/* Header Section */}
+        <div className="flex flex-col md:flex-row md:items-center justify-between mb-8 gap-4 bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
+          <div>
+            <h1 className="text-3xl font-extrabold text-indigo-950 tracking-tight flex items-center gap-3">
+              <FileSpreadsheet className="text-indigo-600" size={32} />
+              KK to Excel 
+              <span className="bg-indigo-100 text-indigo-600 text-xs px-2 py-1 rounded-lg uppercase tracking-widest font-bold">Pro</span>
+            </h1>
+            <p className="text-slate-500 mt-1">Konversi foto Kartu Keluarga ke Master Warga secara instan.</p>
+          </div>
+          <div className="flex gap-3">
+            <button 
+              onClick={() => { setDataMaster([]); setImagePreview(null); setStatusMsg({type:'', text:''}); }}
+              className="px-4 py-2.5 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-2xl transition-all flex items-center gap-2 font-medium"
+            >
+              <Trash2 size={18} /> Reset
+            </button>
+            <button 
+              onClick={downloadExcel}
+              disabled={dataMaster.length === 0}
+              className="px-6 py-2.5 bg-indigo-600 text-white rounded-2xl hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center gap-2 shadow-indigo-200 shadow-xl font-bold"
+            >
+              <FileSpreadsheet size={18} /> Simpan Excel
+            </button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          {/* Left Panel: Upload & Preview Image */}
+          <div className="lg:col-span-1 space-y-6">
+            <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200">
+              <h2 className="text-lg font-bold mb-4 flex items-center gap-2 text-indigo-900">
+                <Camera size={20} className="text-indigo-600" /> Upload Foto KK
+              </h2>
+              
+              <div className="relative group">
+                <input type="file" accept="image/*" onChange={handleFileUpload} className="hidden" id="kk-upload" disabled={loading} />
+                <label 
+                  htmlFor="kk-upload"
+                  className={`flex flex-col items-center justify-center w-full h-72 border-2 border-dashed rounded-3xl cursor-pointer transition-all duration-300
+                    ${loading ? 'bg-slate-50 border-slate-200' : 'bg-indigo-50/20 border-indigo-100 hover:border-indigo-400 hover:bg-indigo-50/50'}`}
+                >
+                  {loading ? (
+                    <div className="flex flex-col items-center">
+                      <div className="relative">
+                        <Loader2 className="animate-spin text-indigo-600 mb-4" size={48} />
+                        <div className="absolute inset-0 flex items-center justify-center">
+                          <div className="w-2 h-2 bg-indigo-600 rounded-full animate-ping"></div>
+                        </div>
+                      </div>
+                      <p className="text-sm text-indigo-900 font-black animate-pulse uppercase tracking-wider">Memproses Data...</p>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="w-16 h-16 bg-white rounded-full shadow-md flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                        <Upload className="text-indigo-600" size={28} />
+                      </div>
+                      <p className="text-sm font-bold text-slate-700">Pilih Foto Kartu Keluarga</p>
+                      <p className="text-[10px] text-slate-400 mt-2">JPG, PNG, atau WEBP</p>
+                    </>
+                  )}
+                </label>
+              </div>
+
+              {imagePreview && (
+                <div className="mt-6">
+                  <p className="text-[10px] font-bold text-slate-400 uppercase mb-2 tracking-widest">Preview Dokumen</p>
+                  <div className="rounded-2xl overflow-hidden border border-slate-100 shadow-inner">
+                    <img src={imagePreview} alt="Preview" className="w-full h-auto max-h-48 object-cover opacity-80" />
+                  </div>
+                </div>
+              )}
+
+              {statusMsg.text && (
+                <div className={`mt-6 p-4 rounded-2xl flex items-start gap-3 text-sm border-l-4 ${
+                  statusMsg.type === 'error' ? 'bg-red-50 text-red-700 border-red-500' : 
+                  'bg-emerald-50 text-emerald-800 border-emerald-500'
+                }`}>
+                  {statusMsg.type === 'error' ? <AlertCircle size={20} className="shrink-0" /> : <CheckCircle2 size={20} className="shrink-0" />}
+                  <span className="leading-tight font-semibold">{statusMsg.text}</span>
+                </div>
+              )}
+            </div>
+
+            <div className="bg-amber-50 p-5 rounded-3xl border border-amber-100 flex gap-4">
+              <div className="w-10 h-10 bg-amber-100 rounded-2xl flex items-center justify-center shrink-0">
+                <Info className="text-amber-600" size={20} />
+              </div>
+              <p className="text-xs text-amber-800 leading-relaxed">
+                <strong className="block mb-1">Tips Akurasi:</strong>
+                Pastikan posisi KK tidak terlipat dan tulisan terbaca jelas. Jika ada kesalahan data, Anda bisa menghapus baris di tabel sebelah dan upload ulang bagian yang kurang.
+              </p>
+            </div>
+          </div>
+
+          {/* Right Panel: Data Table */}
+          <div className="lg:col-span-2">
+            <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden min-h-[600px] flex flex-col">
+              <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-white">
+                <div className="flex items-center gap-3">
+                  <h2 className="font-black text-slate-800 tracking-tight">DATA MASTER WARGA</h2>
+                  <span className="bg-slate-100 text-slate-600 text-[10px] px-2.5 py-1 rounded-full font-bold">
+                    DRAFT
+                  </span>
+                </div>
+                <div className="text-xs bg-indigo-600 text-white px-4 py-1.5 rounded-full font-black shadow-lg shadow-indigo-100">
+                  {dataMaster.length} BARIS
+                </div>
+              </div>
+              
+              <div className="overflow-x-auto flex-grow">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead>
+                    <tr className="bg-slate-50/50 text-slate-400 border-b border-slate-100">
+                      <th className="px-6 py-5 font-black uppercase tracking-widest text-[10px]">No</th>
+                      <th className="px-6 py-5 font-black uppercase tracking-widest text-[10px]">Nama Lengkap</th>
+                      <th className="px-6 py-5 font-black uppercase tracking-widest text-[10px]">NIK</th>
+                      <th className="px-6 py-5 font-black uppercase tracking-widest text-[10px]">Pekerjaan</th>
+                      <th className="px-6 py-5 font-black uppercase tracking-widest text-[10px] text-center">Aksi</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-50">
+                    {dataMaster.length === 0 ? (
+                      <tr>
+                        <td colSpan="5" className="px-6 py-40 text-center">
+                          <div className="flex flex-col items-center opacity-20">
+                            <FileSpreadsheet size={64} className="mb-4" />
+                            <p className="text-lg font-bold">Belum ada data yang diekstrak</p>
+                            <p className="text-sm">Silakan upload foto KK di panel sebelah kiri</p>
+                          </div>
+                        </td>
+                      </tr>
+                    ) : (
+                      dataMaster.map((row, idx) => (
+                        <tr key={idx} className="group hover:bg-indigo-50/30 transition-colors">
+                          <td className="px-6 py-4 text-slate-400 font-medium">{row.no_urut}</td>
+                          <td className="px-6 py-4 font-bold text-slate-900 uppercase tracking-tight">{row.nama}</td>
+                          <td className="px-6 py-4 font-mono text-indigo-600 font-bold bg-indigo-50/20 group-hover:bg-transparent">{row.nik_ktp}</td>
+                          <td className="px-6 py-4 text-slate-600 font-medium">{row.pekerjaan}</td>
+                          <td className="px-6 py-4 text-center">
+                            <button 
+                              onClick={() => setDataMaster(dataMaster.filter((_, i) => i !== idx))}
+                              className="w-8 h-8 rounded-full flex items-center justify-center text-slate-300 hover:text-red-500 hover:bg-red-50 transition-all"
+                              title="Hapus baris ini"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              
+              {dataMaster.length > 0 && (
+                <div className="p-6 bg-slate-50/50 border-t border-slate-100 text-[10px] text-slate-400 italic">
+                  * Data NIK dan No. KK otomatis ditambahkan tanda bintang (*) di depan untuk mencegah pembulatan otomatis oleh Excel.
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default App;
