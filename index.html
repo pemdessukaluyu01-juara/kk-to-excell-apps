@@ -1,311 +1,277 @@
-import React, { useState, useEffect } from 'react';
-import { Upload, FileSpreadsheet, Camera, Trash2, Loader2, AlertCircle, CheckCircle2, Info, HelpCircle, Key, Eye, EyeOff } from 'lucide-react';
-
-// Import SheetJS untuk export Excel asli (.xlsx)
-const XLSX_SCRIPT_URL = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
-
-const App = () => {
-  const [loading, setLoading] = useState(false);
-  const [dataMaster, setDataMaster] = useState([]);
-  const [imagePreview, setImagePreview] = useState(null);
-  const [statusMsg, setStatusMsg] = useState({ type: '', text: '' });
-  const [showHelp, setShowHelp] = useState(false);
-  const [showKey, setShowKey] = useState(false);
-  
-  // State untuk API Key - Sudah diisi dengan key milikmu sebagai default
-  const [userApiKey, setUserApiKey] = useState("AIzaSyCRjfJuTfL8iCT23qAqb7D3amLVldW9mFc");
-
-  // Load library & API Key dari localStorage saat startup
-  useEffect(() => {
-    const script = document.createElement("script");
-    script.src = XLSX_SCRIPT_URL;
-    document.head.appendChild(script);
-
-    // Jika ada key yang pernah disimpan di browser ini, gunakan itu. 
-    // Jika tidak, pakai default yang ada di state di atas.
-    const savedKey = localStorage.getItem("gemini_api_key");
-    if (savedKey) setUserApiKey(savedKey);
-  }, []);
-
-  // Simpan key ke localStorage jika user merubahnya secara manual di UI
-  const handleKeyChange = (e) => {
-    const val = e.target.value;
-    setUserApiKey(val);
-    localStorage.setItem("gemini_api_key", val);
-  };
-
-  const extractDataFromImage = async (base64Image) => {
-    const finalKey = userApiKey.trim(); 
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KK to Excel - Desa Sukaluyu</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- React & Babel -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- SheetJS -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@0.344.0/dist/umd/lucide.min.js"></script>
     
-    if (!finalKey) {
-      setStatusMsg({ type: 'error', text: 'API Key Kosong! Masukkan key agar AI bisa bekerja.' });
-      return;
-    }
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap');
+        body { font-family: 'Inter', sans-serif; }
+        .transition-all { transition: all 0.3s ease; }
+    </style>
+</head>
+<body class="bg-gray-50 text-slate-800">
+    <div id="root"></div>
 
-    setLoading(true);
-    setStatusMsg({ type: 'info', text: 'Sedang menganalisis foto Kartu Keluarga...' });
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
 
-    const systemPrompt = `
-      Anda adalah ekstraktor data Kartu Keluarga profesional. 
-      Tugas: Ekstrak data dari gambar KARTU KELUARGA ke format JSON.
-      
-      ATURAN KETAT:
-      1. Ambil "No. KK" (16 digit angka di bagian atas).
-      2. Ekstrak tabel anggota keluarga hanya jika "Nama Lengkap" dan "NIK" terbaca jelas.
-      3. JANGAN memasukkan baris kosong atau data dari bagian luar tabel.
-      4. Format JSON: { "no_kk": "...", "anggota": [{ "nik": "...", "nama": "...", "kelamin": "...", "alamat": "...", "rt": "...", "rw": "...", "tgl_lahir": "...", "agama": "...", "pendidikan": "...", "pekerjaan": "...", "gol_darah": "...", "kewarganegaraan": "..." }] }
-    `;
+        // Komponen Icon Stabil (Mencegah React #130)
+        const Icon = ({ name, size = 20, className = "" }) => {
+            const iconRef = useRef(null);
+            useEffect(() => {
+                if (iconRef.current && window.lucide) {
+                    iconRef.current.innerHTML = '';
+                    const iconData = window.lucide.icons[name];
+                    if (iconData) {
+                        window.lucide.createIcons({
+                            icons: { [name]: iconData },
+                            attrs: { strokeWidth: 2, width: size, height: size, class: className }
+                        });
+                    }
+                }
+            }, [name, size, className]);
+            return <span ref={iconRef} className="inline-flex items-center"></span>;
+        };
 
-    try {
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${finalKey}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{
-            parts: [
-              { text: "Ekstrak data anggota keluarga saja sesuai urutan di tabel KK." },
-              { inlineData: { mimeType: "image/jpeg", data: base64Image.split(',')[1] } }
-            ]
-          }],
-          systemInstruction: { parts: [{ text: systemPrompt }] },
-          generationConfig: { responseMimeType: "application/json" }
-        })
-      });
+        const App = () => {
+            const [loading, setLoading] = useState(false);
+            const [dataMaster, setDataMaster] = useState([]);
+            const [statusMsg, setStatusMsg] = useState({ type: '', text: '' });
+            const [showSettings, setShowSettings] = useState(false);
+            const [userApiKey, setUserApiKey] = useState("AIzaSyCRjfJuTfL8iCT23qAqb7D3amLVldW9mFc");
 
-      const result = await response.json();
-      
-      if (result.error) {
-        throw new Error(result.error.message || "API Error");
-      }
+            useEffect(() => {
+                const savedKey = localStorage.getItem("gemini_api_key_v3");
+                if (savedKey) setUserApiKey(savedKey);
+            }, []);
 
-      const extractedText = result.candidates?.[0]?.content?.parts?.[0]?.text;
-      
-      if (extractedText) {
-        const parsed = JSON.parse(extractedText);
-        if (parsed.anggota) {
-          parsed.anggota = parsed.anggota.filter(p => p.nama && p.nama.trim().length > 1);
-        }
-        processExtractedData(parsed);
-        setStatusMsg({ type: 'success', text: `Berhasil mengekstrak ${parsed.anggota.length} jiwa dari KK.` });
-      }
-    } catch (error) {
-      console.error(error);
-      setStatusMsg({ type: 'error', text: `Gagal: ${error.message}. Pastikan Key benar & foto jelas.` });
-    } finally {
-      setLoading(false);
-    }
-  };
+            const saveApiKey = (val) => {
+                setUserApiKey(val);
+                localStorage.setItem("gemini_api_key_v3", val);
+            };
 
-  const processExtractedData = (data) => {
-    const startNo = dataMaster.length + 1;
-    const newRows = data.anggota.map((person, index) => ({
-      no_urut: startNo + index,
-      no_kk: `*${data.no_kk}`,
-      nik_ktp: `*${person.nik}`,
-      nama: person.nama.toUpperCase(),
-      kelamin: person.kelamin,
-      alamat: person.alamat,
-      rt: person.rt,
-      rw: person.rw,
-      tgl_lahir: person.tgl_lahir,
-      agama: person.agama,
-      pendidikan: person.pendidikan,
-      status_tinggal: "Menetap",
-      pekerjaan: person.pekerjaan.toUpperCase(),
-      gol_darah: person.gol_darah || "-",
-      kewarganegaraan: person.kewarganegaraan || "WNI",
-      keterangan: ""
-    }));
-    setDataMaster(prev => [...prev, ...newRows]);
-  };
+            const extractData = async (base64) => {
+                if (!userApiKey) {
+                    setStatusMsg({ type: 'error', text: 'Atur API Key di Pengaturan (ikon gear)' });
+                    return;
+                }
+                setLoading(true);
+                setStatusMsg({ type: 'info', text: 'AI sedang membaca data KK...' });
 
-  const handleFileUpload = (e) => {
-    const file = e.target.files[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setImagePreview(reader.result);
-        extractDataFromImage(reader.result);
-      };
-      reader.readAsDataURL(file);
-    }
-  };
+                // INTRUKSI SISTEM UNTUK GEMINI (KUNCI KOLOM)
+                const systemPrompt = `Ekstrak data dari foto Kartu Keluarga ke JSON. 
+                Wajib menyertakan: no_kk, dan list anggota dengan nik, nama, kelamin, tgl_lahir (format DD-MM-YYYY), agama, pendidikan, pekerjaan, gol_darah. 
+                Output hanya JSON murni.`;
 
-  const downloadExcel = () => {
-    if (!window.XLSX) return;
-    const ws = window.XLSX.utils.json_to_sheet(dataMaster);
-    const wb = window.XLSX.utils.book_new();
-    window.XLSX.utils.book_append_sheet(wb, ws, "Master Warga");
-    window.XLSX.writeFile(wb, `Data_KK_Sukaluyu_${new Date().getTime()}.xlsx`);
-  };
+                try {
+                    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${userApiKey}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            contents: [{
+                                parts: [
+                                    { text: "Ekstrak data warga secara detail untuk setiap anggota keluarga." },
+                                    { inlineData: { mimeType: "image/jpeg", data: base64.split(',')[1] } }
+                                ]
+                            }],
+                            systemInstruction: { parts: [{ text: systemPrompt }] },
+                            generationConfig: { responseMimeType: "application/json" }
+                        })
+                    });
 
-  return (
-    <div className="min-h-screen bg-slate-50 p-4 md:p-8 font-sans text-slate-800">
-      <div className="max-w-7xl mx-auto">
-        
-        {/* API Key Input Section - Sekarang sudah terisi otomatis */}
-        <div className="mb-6 bg-slate-900 text-white p-4 rounded-3xl flex flex-col md:flex-row items-center gap-4 shadow-xl border border-slate-700">
-          <div className="flex items-center gap-2 shrink-0">
-            <div className="bg-amber-500 p-1.5 rounded-lg">
-              <Key size={18} className="text-white" />
-            </div>
-            <span className="text-xs font-black uppercase tracking-widest">Gemini API Key:</span>
-          </div>
-          <div className="relative w-full">
-            <input 
-              type={showKey ? "text" : "password"} 
-              placeholder="Tempel API Key AIza... di sini" 
-              className="w-full bg-slate-800 border border-slate-700 rounded-2xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all font-mono"
-              value={userApiKey}
-              onChange={handleKeyChange}
-            />
-            <button 
-              onClick={() => setShowKey(!showKey)}
-              className="absolute right-3 top-2.5 text-slate-500 hover:text-white"
-            >
-              {showKey ? <EyeOff size={18} /> : <Eye size={18} />}
-            </button>
-          </div>
-          <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="text-[10px] text-indigo-400 hover:text-indigo-300 underline shrink-0 font-bold uppercase tracking-tighter">Bikin Key Baru</a>
-        </div>
+                    const res = await response.json();
+                    if (res.error) throw new Error(res.error.message);
 
-        {/* Main Header */}
-        <div className="flex flex-col md:flex-row md:items-center justify-between mb-8 gap-4 bg-white p-6 rounded-[2rem] shadow-sm border border-slate-100">
-          <div>
-            <h1 className="text-3xl font-black text-slate-900 tracking-tight flex items-center gap-3">
-              <div className="bg-indigo-600 p-2 rounded-2xl text-white shadow-lg shadow-indigo-200">
-                <FileSpreadsheet size={28} />
-              </div>
-              KK to Excel <span className="text-indigo-600">Pro</span>
-            </h1>
-            <p className="text-slate-500 mt-1 flex items-center gap-2 text-sm font-medium">
-              Digitalisasi Data Warga Desa Sukaluyu.
-              <button onClick={() => setShowHelp(!showHelp)} className="text-indigo-600 hover:bg-indigo-50 px-2 py-0.5 rounded-lg flex items-center gap-1 text-xs font-bold transition-colors">
-                <HelpCircle size={14} /> Bantuan
-              </button>
-            </p>
-          </div>
-          <div className="flex gap-3">
-            <button onClick={() => { setDataMaster([]); setImagePreview(null); setStatusMsg({type:'', text:''}); }} className="px-5 py-3 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-2xl transition-all flex items-center gap-2 font-bold text-sm">
-              <Trash2 size={18} /> Reset
-            </button>
-            <button onClick={downloadExcel} disabled={dataMaster.length === 0} className="px-8 py-3 bg-indigo-600 text-white rounded-2xl hover:bg-indigo-700 disabled:opacity-50 transition-all flex items-center gap-2 shadow-xl shadow-indigo-100 font-black text-sm uppercase tracking-wider">
-              <FileSpreadsheet size={18} /> Simpan Excel
-            </button>
-          </div>
-        </div>
+                    const text = res.candidates?.[0]?.content?.parts?.[0]?.text;
+                    if (text) {
+                        const parsed = JSON.parse(text);
+                        const startNo = dataMaster.length + 1;
+                        
+                        // KUNCI STRUKTUR KOLOM TEMPLATE MASTER
+                        const newRows = parsed.anggota.map((p, i) => ({
+                            "No Urut": startNo + i,
+                            "no_kk(*+16 digit)": `*${parsed.no_kk || ""}`,
+                            "nik_ktp(*+16 digit)": `*${p.nik || ""}`,
+                            "nama": (p.nama || "").toUpperCase(),
+                            "kelamin": p.kelamin || "",
+                            "alamat": "DUSUN KALIPANDAN",
+                            "rt": "001",
+                            "rw": "001",
+                            "tgl_lahir": p.tgl_lahir || "",
+                            "agama": (p.agama || "ISLAM").toUpperCase(),
+                            "pendidikan": (p.pendidikan || "").toUpperCase(),
+                            "status_tinggal": "Menetap",
+                            "pekerjaan": (p.pekerjaan || "").toUpperCase(),
+                            "golongan darah": (p.gol_darah || "TIDAK TAHU").toUpperCase(),
+                            "Kewarganegaraan": "WNI",
+                            "Keterangan": ""
+                        }));
 
-        {showHelp && (
-          <div className="mb-8 grid grid-cols-1 md:grid-cols-3 gap-6 animate-in fade-in slide-in-from-top-4 duration-500">
-            <div className="bg-white p-6 rounded-3xl border border-indigo-50 shadow-sm hover:shadow-md transition-shadow">
-              <h3 className="font-black text-indigo-950 mb-2 uppercase text-xs tracking-widest">1. Status Key</h3>
-              <p className="text-xs text-slate-500 leading-relaxed">Key sudah terpasang secara default. Kamu bisa langsung mengunggah foto KK tanpa mengatur apapun lagi.</p>
-            </div>
-            <div className="bg-white p-6 rounded-3xl border border-indigo-50 shadow-sm hover:shadow-md transition-shadow">
-              <h3 className="font-black text-indigo-950 mb-2 uppercase text-xs tracking-widest">2. Upload Foto</h3>
-              <p className="text-xs text-slate-500 leading-relaxed">Gunakan foto KK yang paling jelas. AI akan membaca tabel dan mengambil data NIK, Nama, hingga Pekerjaan secara otomatis.</p>
-            </div>
-            <div className="bg-white p-6 rounded-3xl border border-indigo-50 shadow-sm hover:shadow-md transition-shadow">
-              <h3 className="font-black text-indigo-950 mb-2 uppercase text-xs tracking-widest">3. Export Hasil</h3>
-              <p className="text-xs text-slate-500 leading-relaxed">Cek data di tabel kanan. Jika sudah pas, klik Simpan Excel. Data siap di-upload ke sistem database desa.</p>
-            </div>
-          </div>
-        )}
+                        setDataMaster(prev => [...prev, ...newRows]);
+                        setStatusMsg({ type: 'success', text: `Sukses! ${parsed.anggota.length} warga ditambahkan.` });
+                    }
+                } catch (e) {
+                    setStatusMsg({ type: 'error', text: 'Gagal: ' + e.message });
+                } finally {
+                    setLoading(false);
+                }
+            };
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          <div className="lg:col-span-1 space-y-6">
-            <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-slate-200">
-              <h2 className="text-sm font-black mb-4 flex items-center gap-2 text-slate-900 uppercase tracking-widest">
-                <Camera size={18} className="text-indigo-600" /> Input Dokumen
-              </h2>
-              <div className="relative group">
-                <input type="file" accept="image/*" onChange={handleFileUpload} className="hidden" id="kk-upload" disabled={loading} />
-                <label htmlFor="kk-upload" className={`flex flex-col items-center justify-center w-full h-80 border-2 border-dashed rounded-[1.5rem] cursor-pointer transition-all ${loading ? 'bg-slate-50 border-slate-200' : 'bg-indigo-50/20 border-indigo-100 hover:border-indigo-400 hover:bg-indigo-50/50'}`}>
-                  {loading ? (
-                    <div className="flex flex-col items-center text-center px-4">
-                      <Loader2 className="animate-spin text-indigo-600 mb-4" size={48} />
-                      <p className="text-sm text-indigo-900 font-black uppercase tracking-wider">Memindai AI...</p>
-                    </div>
-                  ) : (
-                    <div className="flex flex-col items-center">
-                      <div className="bg-white p-4 rounded-full shadow-sm mb-4 group-hover:scale-110 transition-transform">
-                        <Upload className="text-indigo-600" size={32} />
-                      </div>
-                      <p className="text-sm font-bold text-slate-700">Pilih Foto KK</p>
-                    </div>
-                  )}
-                </label>
-              </div>
+            const handleFile = (e) => {
+                const file = e.target.files[0];
+                if (file) {
+                    const r = new FileReader();
+                    r.onload = () => extractData(r.result);
+                    r.readAsDataURL(file);
+                }
+            };
 
-              {imagePreview && (
-                <div className="mt-6">
-                  <p className="text-[10px] font-black text-slate-400 uppercase mb-2 tracking-widest">Dokumen Terdeteksi:</p>
-                  <div className="rounded-2xl overflow-hidden border border-slate-100 shadow-inner">
-                    <img src={imagePreview} alt="Preview" className="w-full h-auto max-h-48 object-cover opacity-90" />
-                  </div>
-                </div>
-              )}
+            const exportExcel = () => {
+                const ws = XLSX.utils.json_to_sheet(dataMaster);
+                const wb = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(wb, ws, "Master Warga");
+                XLSX.writeFile(wb, `Data_KK_Sukaluyu_Export.xlsx`);
+            };
 
-              {statusMsg.text && (
-                <div className={`mt-6 p-4 rounded-2xl flex items-start gap-3 text-sm border-l-4 shadow-sm ${statusMsg.type === 'error' ? 'bg-red-50 text-red-700 border-red-500' : 'bg-emerald-50 text-emerald-800 border-emerald-500'}`}>
-                  {statusMsg.type === 'error' ? <AlertCircle size={20} className="shrink-0" /> : <CheckCircle2 size={20} className="shrink-0" />}
-                  <span className="leading-tight font-bold">{statusMsg.text}</span>
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div className="lg:col-span-2">
-            <div className="bg-white rounded-[2rem] shadow-sm border border-slate-200 overflow-hidden min-h-[600px] flex flex-col">
-              <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-white">
-                <div className="flex items-center gap-3">
-                  <h2 className="font-black text-slate-800 tracking-tight uppercase text-sm">Daftar Hasil Ekstraksi</h2>
-                </div>
-                <div className="text-[10px] bg-slate-900 text-white px-4 py-1.5 rounded-full font-black shadow-lg">
-                  {dataMaster.length} DATA TERBACA
-                </div>
-              </div>
-              
-              <div className="overflow-x-auto flex-grow">
-                <table className="w-full text-left text-[11px] border-collapse">
-                  <thead>
-                    <tr className="bg-slate-50/50 text-slate-400 border-b border-slate-100">
-                      <th className="px-6 py-5 font-black uppercase tracking-widest text-[9px]">No</th>
-                      <th className="px-6 py-5 font-black uppercase tracking-widest text-[9px]">Nama Warga</th>
-                      <th className="px-6 py-5 font-black uppercase tracking-widest text-[9px]">NIK KTP</th>
-                      <th className="px-6 py-5 font-black uppercase tracking-widest text-[9px] text-center">Hapus</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-50">
-                    {dataMaster.length === 0 ? (
-                      <tr>
-                        <td colSpan="4" className="py-40 text-center text-slate-300 uppercase font-black tracking-widest">Tabel Kosong</td>
-                      </tr>
-                    ) : (
-                      dataMaster.map((row, idx) => (
-                        <tr key={idx} className="group hover:bg-indigo-50/30 transition-colors">
-                          <td className="px-6 py-4 text-slate-400 font-bold">{row.no_urut}</td>
-                          <td className="px-6 py-4 font-black text-slate-900 uppercase tracking-tight">{row.nama}</td>
-                          <td className="px-6 py-4">
-                            <span className="font-mono text-indigo-600 font-black bg-indigo-50 px-2 py-1 rounded-lg border border-indigo-100">{row.nik_ktp}</span>
-                          </td>
-                          <td className="px-6 py-4 text-center">
-                            <button onClick={() => setDataMaster(dataMaster.filter((_, i) => i !== idx))} className="text-slate-300 hover:text-red-500">
-                              <Trash2 size={16} />
+            return (
+                <div className="max-w-5xl mx-auto p-6 md:p-12">
+                    
+                    {/* Header Minimalis */}
+                    <div className="flex justify-between items-center mb-12">
+                        <div>
+                            <h1 className="text-3xl font-extrabold tracking-tight text-slate-900">KK to Excel</h1>
+                            <p className="text-slate-400 text-sm font-medium uppercase tracking-widest">Desa Sukaluyu Digital</p>
+                        </div>
+                        <div className="flex gap-2">
+                            <button onClick={() => setShowSettings(true)} className="p-3 text-slate-300 hover:text-indigo-600 transition-all border border-transparent hover:border-slate-100 rounded-2xl">
+                                <Icon name="Settings" />
                             </button>
-                          </td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};
+                            <button onClick={() => { if(confirm('Kosongkan tabel?')) setDataMaster([]); }} className="p-3 text-slate-300 hover:text-red-500 transition-all border border-transparent hover:border-slate-100 rounded-2xl">
+                                <Icon name="Trash2" />
+                            </button>
+                        </div>
+                    </div>
 
-export default App;
+                    {/* Area Upload */}
+                    <div className="mb-10">
+                        <input type="file" id="upload" className="hidden" onChange={handleFile} disabled={loading} accept="image/*" />
+                        <label htmlFor="upload" className={`flex flex-col items-center justify-center w-full h-56 border-2 border-dashed rounded-[2.5rem] cursor-pointer transition-all ${loading ? 'bg-slate-50 border-slate-200 cursor-wait' : 'bg-white border-slate-200 hover:border-indigo-400 hover:bg-indigo-50/20'}`}>
+                            {loading ? (
+                                <div className="text-center">
+                                    <Icon name="Loader2" className="animate-spin text-indigo-600 mb-4" size={40} />
+                                    <p className="text-[10px] font-black uppercase tracking-[0.2em] text-indigo-500">Proses Ekstraksi AI...</p>
+                                </div>
+                            ) : (
+                                <div className="text-center">
+                                    <div className="bg-indigo-50 p-5 rounded-3xl inline-block mb-4">
+                                        <Icon name="Upload" className="text-indigo-600" size={32} />
+                                    </div>
+                                    <p className="text-sm font-bold text-slate-700">Upload Foto Kartu Keluarga</p>
+                                    <p className="text-[10px] text-slate-400 mt-2 font-medium tracking-wide">PASTIKAN TULISAN TERBACA JELAS</p>
+                                </div>
+                            )}
+                        </label>
+                        {statusMsg.text && (
+                            <div className={`mt-6 text-center text-[10px] font-black uppercase tracking-[0.2em] px-6 py-4 rounded-3xl ${statusMsg.type === 'error' ? 'bg-red-50 text-red-500' : 'bg-emerald-50 text-emerald-600 border border-emerald-100'}`}>
+                                {statusMsg.text}
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Tabel Data Master */}
+                    <div className="bg-white rounded-[2.5rem] shadow-sm border border-slate-100 overflow-hidden">
+                        <div className="p-8 border-b border-slate-50 flex flex-col md:flex-row justify-between items-center bg-slate-50/20 gap-4">
+                            <div>
+                                <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-400">Database Preview</h2>
+                                <p className="text-lg font-bold text-slate-800">{dataMaster.length} Jiwa Terdaftar</p>
+                            </div>
+                            <button 
+                                onClick={exportExcel}
+                                disabled={dataMaster.length === 0}
+                                className="bg-indigo-600 text-white px-8 py-3.5 rounded-2xl text-[11px] font-black uppercase tracking-widest hover:bg-indigo-700 transition-all disabled:opacity-30 flex items-center gap-2 shadow-xl shadow-indigo-100"
+                            >
+                                <Icon name="FileDown" size={16} /> Export Excel
+                            </button>
+                        </div>
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-left text-sm">
+                                <thead className="text-[10px] text-slate-400 font-black uppercase border-b border-slate-50">
+                                    <tr>
+                                        <th className="px-8 py-6">No</th>
+                                        <th className="px-8 py-6">Nama Lengkap</th>
+                                        <th className="px-8 py-6">NIK / KK</th>
+                                        <th className="px-8 py-6 text-right">Opsi</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-50">
+                                    {dataMaster.length === 0 ? (
+                                        <tr><td colSpan="4" className="py-32 text-center text-slate-300 font-bold uppercase text-[10px] tracking-[0.4em]">Belum ada data warga</td></tr>
+                                    ) : (
+                                        dataMaster.map((item, i) => (
+                                            <tr key={i} className="hover:bg-slate-50/50 transition-colors">
+                                                <td className="px-8 py-6 text-slate-300 font-bold">{i+1}</td>
+                                                <td className="px-8 py-6">
+                                                    <p className="font-bold text-slate-700 uppercase">{item.nama}</p>
+                                                    <p className="text-[9px] text-indigo-400 font-black uppercase mt-1">{item.pekerjaan}</p>
+                                                </td>
+                                                <td className="px-8 py-6">
+                                                    <div className="space-y-1">
+                                                        <div className="text-[10px] font-mono font-bold text-slate-500">NIK: {item["nik_ktp(*+16 digit)"]}</div>
+                                                        <div className="text-[10px] font-mono text-slate-300">KK: {item["no_kk(*+16 digit)"]}</div>
+                                                    </div>
+                                                </td>
+                                                <td className="px-8 py-6 text-right">
+                                                    <button onClick={() => setDataMaster(dataMaster.filter((_, idx) => idx !== i))} className="p-2.5 text-red-100 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all">
+                                                        <Icon name="Trash2" size={18}/>
+                                                    </button>
+                                                </td>
+                                            </tr>
+                                        ))
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    {/* Modal Pengaturan */}
+                    {showSettings && (
+                        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-6 z-50">
+                            <div className="bg-white w-full max-w-sm rounded-[3rem] p-10 shadow-2xl">
+                                <div className="flex items-center gap-4 mb-8">
+                                    <div className="bg-indigo-50 p-4 rounded-2xl">
+                                        <Icon name="Cpu" className="text-indigo-600" size={24} />
+                                    </div>
+                                    <h3 className="text-xs font-black uppercase tracking-widest text-slate-800">Sistem AI Key</h3>
+                                </div>
+                                <input 
+                                    type="password"
+                                    className="w-full bg-slate-50 border border-slate-100 rounded-2xl px-6 py-4 text-sm mb-8 outline-none focus:ring-2 focus:ring-indigo-500 transition-all font-mono"
+                                    placeholder="Masukkan Gemini API Key..."
+                                    value={userApiKey}
+                                    onChange={(e) => saveApiKey(e.target.value)}
+                                />
+                                <button onClick={() => setShowSettings(false)} className="w-full bg-slate-900 text-white py-5 rounded-2xl font-bold text-xs uppercase tracking-[0.2em] shadow-lg hover:bg-indigo-600 transition-all">Simpan & Tutup</button>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
